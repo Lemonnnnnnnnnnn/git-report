@@ -6,7 +6,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use include_dir::{include_dir, Dir};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tower_http::cors::CorsLayer;
 
 use crate::config::EffectiveConfig;
@@ -28,15 +28,13 @@ struct AppState {
     config: ServerConfig,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default)]
 struct ReportQuery {
     since: Option<String>,
     until: Option<String>,
     branch: Option<String>,
     no_merge: Option<bool>,
-    #[serde(default)]
     exclude_dir: Vec<String>,
-    #[serde(default)]
     exclude_ext: Vec<String>,
 }
 
@@ -86,18 +84,24 @@ async fn health() -> Json<Health> {
 
 async fn report_handler(
     State(state): State<AppState>,
-    Query(query): Query<ReportQuery>,
-) -> Result<Json<Report>, String> {
+    Query(params): Query<Vec<(String, String)>>,
+) -> Result<Json<Report>, (StatusCode, String)> {
+    let query = parse_report_query(params)?;
     let config = merge_query(&state.config.report, query);
-    report::build_report(&config).map(Json)
+    report::build_report(&config)
+        .map(Json)
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err))
 }
 
 async fn dashboard_handler(
     State(state): State<AppState>,
-    Query(query): Query<ReportQuery>,
-) -> Result<Json<Dashboard>, String> {
+    Query(params): Query<Vec<(String, String)>>,
+) -> Result<Json<Dashboard>, (StatusCode, String)> {
+    let query = parse_report_query(params)?;
     let config = merge_query(&state.config.report, query);
-    report::build_dashboard(&config).map(Json)
+    report::build_dashboard(&config)
+        .map(Json)
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err))
 }
 
 async fn index() -> impl IntoResponse {
@@ -173,4 +177,39 @@ fn merge_query(base: &EffectiveConfig, query: ReportQuery) -> EffectiveConfig {
         exclude_dirs,
         exclude_extensions,
     }
+}
+
+fn parse_report_query(params: Vec<(String, String)>) -> Result<ReportQuery, (StatusCode, String)> {
+    let mut query = ReportQuery::default();
+
+    for (key, value) in params {
+        match key.as_str() {
+            "since" => query.since = Some(value),
+            "until" => query.until = Some(value),
+            "branch" => query.branch = Some(value),
+            "no_merge" => {
+                let parsed = value.parse::<bool>().map_err(|_| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("invalid boolean for no_merge: {value}"),
+                    )
+                })?;
+                query.no_merge = Some(parsed);
+            }
+            "exclude_dir" => query.exclude_dir.extend(split_query_list(&value)),
+            "exclude_ext" => query.exclude_ext.extend(split_query_list(&value)),
+            _ => {}
+        }
+    }
+
+    Ok(query)
+}
+
+fn split_query_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }

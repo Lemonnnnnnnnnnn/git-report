@@ -93,6 +93,14 @@ type Filters = {
 
 const PIE_COLORS = ["#1e5b52", "#e8a54b", "#2563eb", "#ca8a04", "#7c3aed"];
 
+function appendListParams(params: URLSearchParams, key: string, value: string) {
+  value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .forEach((item) => params.append(key, item));
+}
+
 export default function App() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(true);
@@ -113,8 +121,12 @@ export default function App() {
     if (nextFilters.since) params.set("since", nextFilters.since);
     if (nextFilters.until) params.set("until", nextFilters.until);
     if (nextFilters.noMerge) params.set("no_merge", "true");
-    if (nextFilters.excludeDir) params.append("exclude_dir", nextFilters.excludeDir);
-    if (nextFilters.excludeExt) params.append("exclude_ext", nextFilters.excludeExt);
+    if (nextFilters.excludeDir) {
+      appendListParams(params, "exclude_dir", nextFilters.excludeDir);
+    }
+    if (nextFilters.excludeExt) {
+      appendListParams(params, "exclude_ext", nextFilters.excludeExt);
+    }
 
     const response = await fetch(`/api/dashboard?${params.toString()}`);
     if (!response.ok) {

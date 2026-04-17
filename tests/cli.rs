@@ -308,3 +308,78 @@ fn web_command_serves_health_and_dashboard_data() {
     child.kill().unwrap();
     child.wait().unwrap();
 }
+
+#[test]
+fn web_query_filters_accept_comma_separated_and_repeated_values() {
+    let repo = init_repo();
+    commit_file(
+        &repo,
+        "Alice",
+        "alice@example.com",
+        "feat: add app",
+        "src/app.ts",
+        "a\nb\n",
+    );
+    commit_file(
+        &repo,
+        "Alice",
+        "alice@example.com",
+        "test: add spec",
+        "src/app.test.ts",
+        "spec\n",
+    );
+    commit_file(
+        &repo,
+        "Bob",
+        "bob@example.com",
+        "docs: add guide",
+        "docs/guide.md",
+        "guide\n",
+    );
+
+    let port = free_port();
+    let mut child = Command::new(binary_path())
+        .args([
+            "web",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port.to_string(),
+        ])
+        .current_dir(&repo)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    assert!(line.contains("Listening on"), "{line}");
+
+    let dashboard = reqwest::blocking::get(format!(
+        "http://127.0.0.1:{port}/api/dashboard?exclude_dir=docs,src/generated&exclude_ext=.test.ts,.test.tsx"
+    ))
+    .unwrap();
+    assert!(dashboard.status().is_success(), "{dashboard:?}");
+    let dashboard = dashboard.text().unwrap();
+    assert!(dashboard.contains("\"src/app.ts\""), "{dashboard}");
+    assert!(!dashboard.contains("\"docs/guide.md\""), "{dashboard}");
+    assert!(!dashboard.contains("\"src/app.test.ts\""), "{dashboard}");
+
+    let report = reqwest::blocking::get(format!(
+        "http://127.0.0.1:{port}/api/report?exclude_dir=docs&exclude_ext=.test.ts&exclude_ext=.test.tsx"
+    ))
+    .unwrap();
+    assert!(report.status().is_success(), "{report:?}");
+    let report = report.text().unwrap();
+    assert!(report.contains("\"alice@example.com\""), "{report}");
+    assert!(report.contains("\"bob@example.com\""), "{report}");
+    assert!(report.contains("\"total_additions\":2"), "{report}");
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
