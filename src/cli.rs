@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::config::{load_file_config, EffectiveConfig};
 use crate::output;
 use crate::report;
+use crate::server::{self, ServerConfig};
 
 #[derive(Debug, Parser)]
 #[command(name = "git-report")]
@@ -19,11 +20,12 @@ enum Commands {
     Summary(CommandOptions),
     Authors(CommandOptions),
     Report(ReportOptions),
+    Web(WebOptions),
     Preset(PresetCommand),
 }
 
 #[derive(Debug, Args, Clone)]
-struct CommandOptions {
+struct SharedOptions {
     #[arg(long)]
     repo: Option<PathBuf>,
     #[arg(long)]
@@ -40,6 +42,12 @@ struct CommandOptions {
     exclude_dirs: Vec<String>,
     #[arg(long = "exclude-ext")]
     exclude_extensions: Vec<String>,
+}
+
+#[derive(Debug, Args, Clone)]
+struct CommandOptions {
+    #[command(flatten)]
+    base: SharedOptions,
     #[arg(long, default_value = "table")]
     format: OutputFormat,
 }
@@ -79,6 +87,18 @@ struct PresetOptions {
     exclude_extensions: Vec<String>,
 }
 
+#[derive(Debug, Args, Clone)]
+struct WebOptions {
+    #[command(flatten)]
+    base: SharedOptions,
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+    #[arg(long, default_value_t = 3000)]
+    port: u16,
+    #[arg(long)]
+    open: bool,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum OutputFormat {
     Table,
@@ -86,7 +106,7 @@ enum OutputFormat {
     Markdown,
 }
 
-pub fn run() -> Result<(), String> {
+pub async fn run() -> Result<(), String> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Summary(options) => {
@@ -123,6 +143,16 @@ pub fn run() -> Result<(), String> {
                 print_line(content);
             }
         }
+        Commands::Web(options) => {
+            let config = merge_shared_config(&options.base)?;
+            server::serve(ServerConfig {
+                host: options.host,
+                port: options.port,
+                open: options.open,
+                report: config,
+            })
+            .await?;
+        }
         Commands::Preset(command) => match command.preset {
             PresetKind::MonthlyAuthors(options) => {
                 let config = merge_preset_config(&options)?;
@@ -147,6 +177,25 @@ pub fn run() -> Result<(), String> {
 }
 
 fn merge_command_config(options: &CommandOptions) -> Result<EffectiveConfig, String> {
+    let repo = canonical_repo(options.base.repo.as_deref())?;
+    let file_config =
+        load_file_config(resolve_config_path(options.base.config.as_deref(), &repo).as_deref())?;
+    let mut exclude_dirs = file_config.filters.exclude_dirs;
+    exclude_dirs.extend(options.base.exclude_dirs.clone());
+    let mut exclude_extensions = file_config.filters.exclude_extensions;
+    exclude_extensions.extend(options.base.exclude_extensions.clone());
+    Ok(EffectiveConfig {
+        repo,
+        since: options.base.since.clone(),
+        until: options.base.until.clone(),
+        branch: options.base.branch.clone(),
+        no_merge: options.base.no_merge,
+        exclude_dirs,
+        exclude_extensions,
+    })
+}
+
+fn merge_shared_config(options: &SharedOptions) -> Result<EffectiveConfig, String> {
     let repo = canonical_repo(options.repo.as_deref())?;
     let file_config =
         load_file_config(resolve_config_path(options.config.as_deref(), &repo).as_deref())?;

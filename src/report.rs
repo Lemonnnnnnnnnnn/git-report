@@ -1,6 +1,9 @@
 use crate::config::EffectiveConfig;
 use crate::git;
-use crate::model::{AuthorStat, CommitRecord, RepoSummary, Report, ReportMetadata};
+use crate::model::{
+    AuthorStat, CommitRecord, Dashboard, PathStat, RepoSummary, Report, ReportMetadata,
+    TimeseriesPoint,
+};
 use crate::parser;
 use std::collections::BTreeMap;
 
@@ -25,6 +28,36 @@ pub fn build_report(config: &EffectiveConfig) -> Result<Report, String> {
         },
         summary,
         authors,
+    })
+}
+
+pub fn build_dashboard(config: &EffectiveConfig) -> Result<Dashboard, String> {
+    let raw = git::git_log_numstat(
+        &config.repo,
+        config.branch.as_deref(),
+        config.since.as_deref(),
+        config.until.as_deref(),
+    )?;
+    let commits = parser::parse_git_log(&raw);
+    let branch = git::current_branch(&config.repo)?;
+    let authors = aggregate_authors(&commits, config);
+    let summary = summarize(&authors);
+    let timeseries = aggregate_timeseries(&commits, config);
+    let paths = aggregate_paths(&commits, config);
+
+    Ok(Dashboard {
+        report: Report {
+            meta: ReportMetadata {
+                repo: config.repo.display().to_string(),
+                branch,
+                since: config.since.clone(),
+                until: config.until.clone(),
+            },
+            summary,
+            authors,
+        },
+        timeseries,
+        paths,
     })
 }
 
@@ -90,4 +123,74 @@ fn summarize(authors: &[AuthorStat]) -> RepoSummary {
     }
     summary.net_lines = summary.total_additions as i64 - summary.total_deletions as i64;
     summary
+}
+
+fn aggregate_timeseries(
+    commits: &[CommitRecord],
+    config: &EffectiveConfig,
+) -> Vec<TimeseriesPoint> {
+    let mut by_day: BTreeMap<String, TimeseriesPoint> = BTreeMap::new();
+
+    for commit in commits {
+        if config.no_merge && commit.is_merge {
+            continue;
+        }
+
+        let day = commit.date.clone();
+        let entry = by_day
+            .entry(day.clone())
+            .or_insert_with(|| TimeseriesPoint {
+                date: day,
+                ..TimeseriesPoint::default()
+            });
+        entry.commits += 1;
+
+        for file in &commit.files {
+            if file.is_binary || config.should_filter(&file.path) {
+                continue;
+            }
+            entry.additions += file.additions;
+            entry.deletions += file.deletions;
+        }
+        entry.net_lines = entry.additions as i64 - entry.deletions as i64;
+    }
+
+    by_day.into_values().collect()
+}
+
+fn aggregate_paths(commits: &[CommitRecord], config: &EffectiveConfig) -> Vec<PathStat> {
+    let mut path_map: BTreeMap<String, PathStat> = BTreeMap::new();
+
+    for commit in commits {
+        if config.no_merge && commit.is_merge {
+            continue;
+        }
+
+        for file in &commit.files {
+            if file.is_binary || config.should_filter(&file.path) {
+                continue;
+            }
+
+            let entry = path_map
+                .entry(file.path.clone())
+                .or_insert_with(|| PathStat {
+                    path: file.path.clone(),
+                    ..PathStat::default()
+                });
+            entry.commits += 1;
+            entry.additions += file.additions;
+            entry.deletions += file.deletions;
+            entry.net_lines = entry.additions as i64 - entry.deletions as i64;
+        }
+    }
+
+    let mut paths: Vec<PathStat> = path_map.into_values().collect();
+    paths.sort_by(|a, b| {
+        b.additions
+            .cmp(&a.additions)
+            .then_with(|| b.commits.cmp(&a.commits))
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    paths.truncate(20);
+    paths
 }

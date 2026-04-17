@@ -1,14 +1,20 @@
 use std::fs;
+use std::io::{BufRead, BufReader};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
 fn unique_path(name: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("git-report-{name}-{nanos}"))
+    let seq = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("git-report-{name}-{nanos}-{seq}"))
 }
 
 fn run(dir: &Path, program: &str, args: &[&str]) {
@@ -26,6 +32,14 @@ fn run_output(dir: &Path, program: &Path, args: &[&str]) -> std::process::Output
         .current_dir(dir)
         .output()
         .unwrap()
+}
+
+fn free_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
 }
 
 fn commit_file(repo: &Path, name: &str, email: &str, subject: &str, rel: &str, body: &str) {
@@ -226,4 +240,71 @@ fn monthly_authors_preset_does_not_apply_default_path_filters() {
     let json = fs::read_to_string(out_dir.join("monthly-report.json")).unwrap();
     assert!(json.contains("\"total_additions\": 2"), "{json}");
     assert!(json.contains("\"additions\": 2"), "{json}");
+}
+
+#[test]
+fn web_command_serves_health_and_dashboard_data() {
+    let repo = init_repo();
+    commit_file(
+        &repo,
+        "Alice",
+        "alice@example.com",
+        "feat: add app",
+        "src/app.ts",
+        "a\nb\n",
+    );
+    commit_file(
+        &repo,
+        "Bob",
+        "bob@example.com",
+        "feat: add docs",
+        "docs/readme.md",
+        "x\ny\nz\n",
+    );
+
+    let port = free_port();
+    let mut child = Command::new(binary_path())
+        .args([
+            "web",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port.to_string(),
+        ])
+        .current_dir(&repo)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    assert!(line.contains("Listening on"), "{line}");
+
+    let health = reqwest::blocking::get(format!("http://127.0.0.1:{port}/api/health"))
+        .unwrap()
+        .text()
+        .unwrap();
+    assert!(health.contains("\"status\":\"ok\""), "{health}");
+
+    let html = reqwest::blocking::get(format!("http://127.0.0.1:{port}/"))
+        .unwrap()
+        .text()
+        .unwrap();
+    assert!(html.contains("git-report web"), "{html}");
+
+    let dashboard = reqwest::blocking::get(format!("http://127.0.0.1:{port}/api/dashboard"))
+        .unwrap()
+        .text()
+        .unwrap();
+    assert!(dashboard.contains("\"timeseries\""), "{dashboard}");
+    assert!(dashboard.contains("\"paths\""), "{dashboard}");
+    assert!(dashboard.contains("\"authors\""), "{dashboard}");
+
+    child.kill().unwrap();
+    child.wait().unwrap();
 }

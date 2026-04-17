@@ -16,6 +16,12 @@ Binary output:
 ./target/release/git-report
 ```
 
+Run the local dashboard:
+
+```bash
+./target/release/git-report web --repo /path/to/repo --open
+```
+
 ## Commands
 
 ### `summary`
@@ -92,6 +98,38 @@ Supported options:
 - `--exclude-dir <path-fragment>`
 - `--exclude-ext <extension>`
 
+### `web`
+
+Start a local web server and open an interactive dashboard for the selected repository.
+
+```bash
+git-report web --repo /path/to/repo --open
+git-report web --repo /path/to/repo --since "90 days ago" --port 4123
+```
+
+Supported options:
+
+- `--repo <path>`
+- `--since <expr>`
+- `--until <expr>`
+- `--branch <name>`
+- `--config <path>`
+- `--no-merge`
+- `--exclude-dir <path-fragment>`
+- `--exclude-ext <extension>`
+- `--host <host>`: local bind host, default `127.0.0.1`
+- `--port <port>`: local bind port, default `3000`
+- `--open`: open the dashboard in the default browser
+
+The dashboard includes:
+
+- KPI summary cards
+- commit and line-change trends
+- contributor charts
+- author detail table
+- hot path table
+- interactive local filtering
+
 ## Config File
 
 If `git-report.toml` exists in the target repository, it is loaded automatically. You can also pass a config path explicitly with `--config`.
@@ -133,3 +171,29 @@ Generate a Markdown monthly report compatible with the old workflow:
 ```bash
 git-report preset monthly-authors --repo /path/to/repo --output-dir docs/git-reports
 ```
+
+Launch the interactive dashboard:
+
+```bash
+git-report web --repo /path/to/repo --open
+```
+
+## Frontend Development
+
+The dashboard frontend lives in `web/` and uses:
+
+- React
+- Vite
+- Tailwind CSS
+- shadcn-style UI components
+- Recharts
+
+Install and rebuild frontend assets:
+
+```bash
+cd web
+npm install
+npm run build
+```
+
+The Rust server embeds files from `web/dist` at compile time, so rebuild the frontend before shipping a new binary if the UI changed.

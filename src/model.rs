@@ -56,3 +56,28 @@ pub struct Report {
     pub summary: RepoSummary,
     pub authors: Vec<AuthorStat>,
 }
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TimeseriesPoint {
+    pub date: String,
+    pub commits: u64,
+    pub additions: u64,
+    pub deletions: u64,
+    pub net_lines: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PathStat {
+    pub path: String,
+    pub commits: u64,
+    pub additions: u64,
+    pub deletions: u64,
+    pub net_lines: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Dashboard {
+    pub report: Report,
+    pub timeseries: Vec<TimeseriesPoint>,
+    pub paths: Vec<PathStat>,
+}
